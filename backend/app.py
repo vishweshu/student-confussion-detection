@@ -1,5 +1,6 @@
 from flask import Flask, Response, jsonify, render_template
 import cv2
+import numpy as np
 import threading
 import time
 from ai_model import analyze_class
@@ -7,7 +8,20 @@ import atexit
 
 app = Flask(__name__)
 
-camera = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+# Deploy environments (like Heroku) typically don't have a webcam available.
+# Fall back to a blank frame so the server can still run.
+
+def _init_camera():
+    try:
+        cam = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        if not cam.isOpened():
+            cam.release()
+            return None
+        return cam
+    except Exception:
+        return None
+
+camera = _init_camera()
 
 confused = 0
 attentive = 0
@@ -24,6 +38,13 @@ stop_event = threading.Event()
 def read_camera():
     global raw_frame
     while not stop_event.is_set():
+        if camera is None:
+            # No webcam available (e.g., deployed on Heroku). Use a blank frame.
+            with lock:
+                raw_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+            time.sleep(0.1)
+            continue
+
         success, frame = camera.read()
         if not success:
             time.sleep(0.1)
@@ -129,9 +150,11 @@ def stats():
 def shutdown():
     stop_event.set()
     time.sleep(0.2) # Give threads a moment to finish
-    if camera.isOpened():
+    if camera is not None and camera.isOpened():
         camera.release()
-    print("Camera properly released and closed.")
+        print("Camera properly released and closed.")
+    else:
+        print("No camera to release (running in headless/deployed mode).")
 
 
 atexit.register(shutdown)
